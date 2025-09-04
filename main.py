@@ -7,16 +7,16 @@ import pygame
 # -------------------------
 # Configuration
 # -------------------------
-WIDTH, HEIGHT = 960, 540
+WIDTH, HEIGHT = 2880, 1620
 ASPECT = WIDTH / HEIGHT
 FPS = 60
 
-PADDLE_W, PADDLE_H = 14, 96
+PADDLE_W, PADDLE_H = 14, 128
 PADDLE_MARGIN = 36
 PADDLE_MAX_SPEED = 520  # px/s
 
 BALL_SIZE = 14
-BALL_SPEED = 360  # px/s initial
+BALL_SPEED = 420  # px/s initial
 BALL_SPEED_MAX = 760
 BALL_ACCEL_HIT = 1.04  # multiply on paddle hit
 BALL_ACCEL_TIME = 0.000  # additive accel per frame (0 to disable)
@@ -24,7 +24,7 @@ BALL_ACCEL_TIME = 0.000  # additive accel per frame (0 to disable)
 WIN_SCORE = 7
 
 GLOW_STRENGTH = 4  # 1..6
-TRAIL_LENGTH = 16
+TRAIL_LENGTH = 30
 PARTICLE_COUNT_HIT = 22
 PARTICLE_COUNT_SCORE = 34
 
@@ -196,23 +196,49 @@ class Ball:
 
     def collide_paddle(self, paddle: Paddle):
         if self.rect.colliderect(paddle.rect):
-            # Determine collision point relative to paddle center for angle
+            # collision point relative to paddle center (-1..1)
             rel = (self.y - (paddle.y + PADDLE_H / 2)) / (PADDLE_H / 2)
             rel = clamp(rel, -1.0, 1.0)
+
+            # base angle (negative => up on screen because y grows downward)
             angle = rel * (math.pi / 3.25)  # max ~55 degrees
+
+            # target speed after hit
             spd = min(BALL_SPEED_MAX, math.hypot(self.vx, self.vy) * BALL_ACCEL_HIT + 6.0)
-            dir_x = -1 if self.vx < 0 else 1
-            # reflect and apply new angle from paddle normal
-            dir_x *= -1  # bounce
-            self.vx = math.cos(angle) * spd * dir_x
-            self.vy = math.sin(angle) * spd
-            # nudge outside paddle to prevent sticking
+
+            # decide bounce horizontal direction by paddle side (robust if self.vx is tiny)
+            dir_x = 1 if paddle.x < WIDTH / 2 else -1
+
+            # base components from angle (before spin)
+            base_vy = math.sin(angle) * spd
+            base_vx = math.cos(angle) * spd * dir_x
+
+            # small "spin" / influence from paddle movement
+            spin = paddle.vy * 0.3
+            new_vy = base_vy + spin
+
+            # Don't let spin invert the intended vertical direction (avoids stalls/inversions)
+            if base_vy != 0 and sign(new_vy) != sign(base_vy):
+                # keep same sign as base_vy and ensure reasonable magnitude
+                new_vy = math.copysign(max(abs(base_vy) * 0.5, abs(spin)), base_vy)
+
+            # Ensure a minimum vertical component so the ball doesn't run nearly horizontal
+            min_vy = max(120.0, spd * 0.18)  # 120 px/s floor + proportional to speed
+            if abs(new_vy) < min_vy:
+                new_vy = math.copysign(min_vy, base_vy if base_vy != 0 else (spin or 1))
+
+            # Recompute vx so total speed ≈ spd (preserve energy)
+            new_vx = dir_x * math.sqrt(max(0.0, spd * spd - new_vy * new_vy))
+
+            self.vx = new_vx
+            self.vy = new_vy
+
+            # push ball clearly outside the paddle to avoid repeated collisions
+            push_out = 4  # pixels
             if dir_x > 0:
-                self.x = paddle.x + PADDLE_W + self.size / 2 + 1
+                self.x = paddle.x + PADDLE_W + self.size / 2 + push_out
             else:
-                self.x = paddle.x - self.size / 2 - 1
-            # add a hint of spin based on paddle velocity
-            self.vy += paddle.vy * 0.12
+                self.x = paddle.x - self.size / 2 - push_out
 
     def draw(self, surf, glow_layer):
         # draw trail
